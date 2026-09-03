@@ -1,0 +1,16 @@
+# Credentials and per-machine paths live here — never commit it (see local.properties.sample).
+local.properties
+
+*.iml
+.gradle/
+.idea/
+.kotlin/
+build/
+captures/
+.externalNativeBuild/
+.cxx/
+*.apk
+*.aab
+*.keystore
+*.jks
+.DS_Store

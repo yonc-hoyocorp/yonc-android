@@ -1,0 +1,23 @@
+[versions]
+# AGP 9 ships its own Kotlin compiler; the Compose compiler plugin follows that Kotlin version.
+agp = "9.2.1"
+kotlin = "2.4.0"
+# The YOnC SDK release this sample integrates. Bump here and nowhere else.
+yonc = "0.3.0"
+composeBom = "2026.06.00"
+activityCompose = "1.8.0"
+lifecycle = "2.6.2"
+coroutines = "1.9.0"
+
+[libraries]
+yonc-android = { module = "dev.yonc:yonc-android", version.ref = "yonc" }
+compose-bom = { module = "androidx.compose:compose-bom", version.ref = "composeBom" }
+compose-ui = { module = "androidx.compose.ui:ui" }
+compose-material3 = { module = "androidx.compose.material3:material3" }
+androidx-activity-compose = { module = "androidx.activity:activity-compose", version.ref = "activityCompose" }
+androidx-lifecycle-viewmodel-compose = { module = "androidx.lifecycle:lifecycle-viewmodel-compose", version.ref = "lifecycle" }
+kotlinx-coroutines-android = { module = "org.jetbrains.kotlinx:kotlinx-coroutines-android", version.ref = "coroutines" }
+
+[plugins]
+android-application = { id = "com.android.application", version.ref = "agp" }
+kotlin-compose = { id = "org.jetbrains.kotlin.plugin.compose", version.ref = "kotlin" }

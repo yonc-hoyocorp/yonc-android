@@ -1,0 +1,16 @@
+# Copy to local.properties and fill in. local.properties is git-ignored.
+
+# Android SDK location (Android Studio writes this line for you).
+sdk.dir=/path/to/Android/sdk
+
+# Read-only credentials for the YOnC Maven repository (issued by YOnC).
+yonc.repo.user=
+yonc.repo.token=
+
+# Optional — device attestation for Turbo Mode. Leave empty to run without attestation
+# (the network admits unattested devices only while enforcement is off).
+# The application id is issued by YOnC for THIS package name + signing certificate.
+yonc.attestation.applicationId=
+# Your own opaque identifier for the current user (1–128 UTF-8 bytes, no whitespace at the ends).
+# The sample uses one fixed value; a real app passes the signed-in user's id.
+yonc.attestation.externalReportingId=
