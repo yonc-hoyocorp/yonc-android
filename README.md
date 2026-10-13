@@ -128,7 +128,9 @@ already downloaded. Model files are 0.5–3.5 GB; recommend Wi-Fi. A downloaded 
 `ModelEntry.Local` — only the SDK can create one, so holding it is the proof of download.
 
 `defaultModelId` is null before `initialize()` and while no catalogue has named a default; this
-sample marks that model's row and names it on the download button.
+sample marks that model's row and names it on the download button. Ids are `ModelId`, a value
+class over the catalogue's string: `ModelId("…")` builds one, `.value` reads the text, and two ids
+are equal when their text is.
 
 Sizes are bytes, and turning them into text is the host's job (units, rounding, locale).
 `ModelInfo.sizeBytes` is the exact download size, 0 when unknown. `ModelEntry.Downloading` carries
