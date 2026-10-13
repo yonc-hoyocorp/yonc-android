@@ -6,7 +6,21 @@ contributes its idle compute to the YOnC network while it charges, and the netwo
 each of your users earned.
 
 The app is deliberately plain: one `Application`, one `Activity`, one `ViewModel`, one screen.
-Everything the SDK needs from a host is visible in those four files.
+Everything the SDK needs from a host is visible in those four files; a fifth holds the words the
+screen and the Turbo notification share.
+
+## What's new since 0.3.0
+
+- **0.5.0, breaking:** `ModelInfo.sizeLabel` and `ModelInfo.spec` are gone. `ModelInfo.sizeBytes`
+  is the exact download size and `ModelEntry.Downloading` carries `receivedBytes` / `totalBytes`;
+  the host formats sizes (section 3).
+- **0.5.0:** `models.defaultModelId` names this device's default model (section 3);
+  `SafeState.unmet` says why Turbo waits, and Turbo's notification takes your words, optionally as
+  an Android 16 Live Update (section 4); `backgroundWork.openSettings()` opens the app's own
+  battery screen where the device has one (section 5); `turbo.setReportingLabel` switches the
+  credited account without a restart (section 6).
+- **0.4.1:** the SDK ships its own R8 keep rules — a minified host adds none (section 7).
+- **0.4.0:** an optional `RouterEnvironment` for partners running their own Router (section 2).
 
 ## Requirements
 
@@ -42,7 +56,7 @@ dependencyResolutionManagement {
 
 ```kotlin
 dependencies {
-    implementation("dev.yonc:yonc-android:0.3.0")
+    implementation("dev.yonc:yonc-android:0.5.0")
 }
 
 android {
@@ -79,6 +93,22 @@ class SampleApplication : Application() {
 interface, no dependency-injection framework required. The handle exposes `models`, `turbo` and
 the Android-only `backgroundWork`.
 
+**Your own Router (optional).** Without an `environment` the SDK talks to the YOnC network its
+release was built for. A partner that operates its own Router instance passes where it lives, once
+per process:
+
+```kotlin
+Yonc.create(
+    app = this,
+    identity = identity,
+    notification = engineNotification,
+    environment = RouterEnvironment(
+        baseUrl = "https://router.example.com/",
+        playIntegrityCloudProjectNumber = 123456789012,   // only if your Router decodes Play Integrity tokens with its own Google Cloud project
+    ),
+)
+```
+
 ## 3. One model on the device
 
 Turbo runs the network's tasks on a model stored on the phone, so the host has to get one there
@@ -87,7 +117,8 @@ Turbo runs the network's tasks on a model stored on the phone, so the host has t
 ```kotlin
 yonc.models.initialize()                     // scan local files + fetch the catalogue for this device
 yonc.models.download()                       // the model the network designates as default for this device
-yonc.models.models                           // StateFlow<List<ModelEntry>>: NotDownloaded / Downloading(progress) / Local
+yonc.models.defaultModelId                   // StateFlow<ModelId?>: which model that is
+yonc.models.models                           // StateFlow<List<ModelEntry>>: NotDownloaded / Downloading(receivedBytes, totalBytes) / Local
 yonc.models.delete(id)
 ```
 
@@ -95,6 +126,15 @@ yonc.models.delete(id)
 catalogue to arrive. The SDK caches the catalogue, so later launches work offline with whatever is
 already downloaded. Model files are 0.5–3.5 GB; recommend Wi-Fi. A downloaded model is a
 `ModelEntry.Local` — only the SDK can create one, so holding it is the proof of download.
+
+`defaultModelId` is null before `initialize()` and while no catalogue has named a default; this
+sample marks that model's row and names it on the download button.
+
+Sizes are bytes, and turning them into text is the host's job (units, rounding, locale).
+`ModelInfo.sizeBytes` is the exact download size, 0 when unknown. `ModelEntry.Downloading` carries
+`receivedBytes` and `totalBytes`; its `progress` (0..1) derives from them and stays 0 while the
+total is unknown (0). This sample shows "1B · INT4 · 584 MB" from `tier`, `quant` and `sizeBytes`,
+and "312 MB / 584 MB" with a progress bar while downloading.
 
 ## 4. Turbo Mode
 
@@ -104,7 +144,7 @@ yonc.turbo.stop()
 
 yonc.turbo.status        // StateFlow<TurboStatus>: Off, WaitingForSafeState, Connecting, Preparing, Connected, Working, Error, AttestationFailed
 yonc.turbo.stats         // tasks done, tokens generated, last halt reason
-yonc.turbo.safeState     // charging / Wi-Fi / screen locked / thermal / vendor restriction + the verdict
+yonc.turbo.safeState     // charging / Wi-Fi / screen locked / thermal / vendor restriction + the verdict and its reasons
 yonc.turbo.attestation   // NotConfigured, Idle, Enrolling, Enrolled, Admitting, Unavailable, Failed
 ```
 
@@ -113,6 +153,39 @@ locked and thermally comfortable. The SDK evaluates it every second; the host on
 shows it. While Turbo is on the SDK holds a foreground service with a notification (see section 5 for what
 that needs from the user), so the work survives the screen turning off. Tapping that notification opens your launcher activity with the
 extra `TurboController.EXTRA_SHOW_TURBO` set — show your Turbo screen when you see it.
+
+### Why Turbo waits
+
+`safeState.unmet` is the set of `SafeCondition`s failing right now under the SDK's policy:
+`Charging`, `Wifi`, `ScreenLocked`, `Thermal`, `BackgroundWork`. Show these — and only these — as
+the reasons Turbo waits; `isSafe` is exactly `unmet.isEmpty()`. Later SDK versions may add terms,
+so a `when` over the enum keeps an `else` branch (this sample's `SafeConditions.kt`).
+
+### Turbo's notification
+
+The SDK owns the notification's mechanics — the channel, the ongoing flag, the tap that opens your
+app; the words are yours, from a `TurboNotificationSource` passed to `Yonc.create`:
+
+```kotlin
+turboNotification = TurboNotificationSource { status, stats, safeState, demoted ->
+    when {
+        demoted -> TurboNotification(title = "Turbo Mode is running slower", text = TurboNotificationSource.DEMOTED_TEXT)
+        status == TurboStatus.Working -> TurboNotification(title = "Turbo Mode is on", text = "${stats.tasksDone} tasks", shortText = "${stats.tasksDone}")
+        else -> TurboNotificationSource.Default.notification(status, stats, safeState, demoted)
+    }.copy(smallIconResId = R.drawable.ic_stat, liveUpdate = true)
+}
+```
+
+- The SDK asks on every change of the status, the session counters, the safe state or `demoted`,
+  and re-posts only when the answer differs — about once a second at most. Leave the parameter
+  out to keep the SDK's own words (`TurboNotificationSource.Default`).
+- `demoted`: Android's 6-hour foreground limit moved Turbo to the background; it keeps running,
+  slower, until the user opens the app. `TurboNotificationSource.DEMOTED_TEXT` says exactly that —
+  keep those words.
+- `liveUpdate = true` asks Android 16+ for a Live Update: a status-bar chip with `shortText` next
+  to the small icon. The system decides whether to promote it; otherwise it stays an ordinary
+  ongoing notification. The flag also selects the notification channel, so keep it the same in
+  every state.
 
 ## 5. Battery optimization and notifications
 
@@ -149,7 +222,7 @@ on the system power whitelist, which is what the SDK reads.
 ```kotlin
 yonc.backgroundWork.restricted          // StateFlow<Boolean>: this device is known to restrict us, re-read every second
 yonc.backgroundWork.vendorManagerPackage // the detected manager, null on stock Android
-yonc.backgroundWork.openSettings()      // the deepest vendor screen the SDK can reach (App info in the worst case)
+yonc.backgroundWork.openSettings()      // this app's own battery screen where the device has one, else its App info page
 ```
 
 While `restricted` is true the safe state stays false and Turbo waits in `WaitingForSafeState` —
@@ -180,10 +253,15 @@ ClientIdentity(
 ```
 
 - `externalReportingId` is opaque to the SDK and the network: never parsed, never logged, no
-  personal data required. Changing it re-enrolls the device under the new label on the next Turbo
-  start. The identity is fixed for the process lifetime in this SDK version.
+  personal data required. Pass the signed-in user's id at creation on every launch.
+- When the user switches accounts while the process lives, call
+  `yonc.turbo.setReportingLabel(newId)`. The network credits the new id from then on: Turbo leaves
+  its connection at once (a task in flight is dropped) and reconnects under it; with Turbo off the
+  id is used at the next start. It throws `IllegalArgumentException` for an id the network would
+  reject and does nothing without an attestation config.
 - Everything operator-side (Google Cloud project, attestation environment) ships inside the SDK;
-  the two values above are all a host supplies.
+  the two values above are all a host supplies (a partner running its own Router names its Google
+  Cloud project in `RouterEnvironment`, section 2).
 - Without a config the device connects unattested; the network admits that only while
   enforcement is off for your application.
 - On a sticky refusal the SDK parks Turbo in `TurboStatus.AttestationFailed` and stops retrying
@@ -193,7 +271,8 @@ ClientIdentity(
   unattested.
 
 This sample reads the two values from `local.properties` so it can be tried without an account
-system — a real app passes the signed-in user's id.
+system — a real app passes the signed-in user's id. With attestation configured, the Turbo card's
+*Account* field calls `setReportingLabel`; the switch lasts until the process ends.
 
 ## 7. Build and run
 
@@ -202,13 +281,12 @@ system — a real app passes the signed-in user's id.
 ```
 
 The release build (`./gradlew :app:assembleRelease`) is shrunk with R8 and the default rules
-only — the SDK needs no keep rules from the host.
+only — the SDK AAR carries its own keep rules, so the host adds none (this sample's
+`proguard-rules.pro` is empty on purpose).
 
 ## Known limitations
 
 - arm64-v8a physical devices only; no emulator.
-- The attestation identity is fixed at `Yonc.create`; switching the signed-in user means a
-  process restart in this SDK version.
 - Downloads run in the foreground and do not resume after an interruption.
 - A vendor-restricted device (section 5) cannot serve until the user allows background activity
   on the vendor's own screen; the SDK detects and navigates, the user has to flip the switch.
@@ -217,8 +295,9 @@ only — the SDK needs no keep rules from the host.
 
 ```
 app/src/main/java/dev/yonc/sample/
-  SampleApplication.kt   Yonc.create + attestation config
+  SampleApplication.kt   Yonc.create + attestation config + Turbo's notification words
   MainActivity.kt        notification permission request + Compose entry
-  SampleViewModel.kt     the SDK roots exposed to the UI
-  ui/SampleScreen.kt     model · Turbo (status, safe state, background work, attestation)
+  SampleViewModel.kt     the SDK roots exposed to the UI + the account switch
+  SafeConditions.kt      the words for why Turbo waits (screen and notification)
+  ui/SampleScreen.kt     model · Turbo (status, reasons, safe state, background work, attestation, account)
 ```
