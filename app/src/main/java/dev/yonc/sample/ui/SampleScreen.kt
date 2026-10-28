@@ -38,6 +38,8 @@ import dev.yonc.sample.label
 import dev.yonc.sdk.ModelEntry
 import dev.yonc.sdk.ModelInfo
 import dev.yonc.sdk.attestation.AttestationState
+import dev.yonc.sdk.chat.ChatAvailability
+import dev.yonc.sdk.chat.ChatRole
 import dev.yonc.sdk.turbo.TurboStatus
 import java.util.Locale
 
@@ -52,6 +54,7 @@ fun SampleScreen(viewModel: SampleViewModel = viewModel()) {
             verticalArrangement = Arrangement.spacedBy(16.dp),
         ) {
             item { ModelsCard(viewModel) }
+            item { ChatCard(viewModel) }
             item { TurboCard(viewModel) }
         }
     }
@@ -116,6 +119,74 @@ private fun ModelRow(entry: ModelEntry, isDefault: Boolean, viewModel: SampleVie
             is ModelEntry.Local -> TextButton(onClick = { viewModel.delete(entry.info.id) }) { Text("Delete") }
         }
     }
+}
+
+// --- On-device chat ---------------------------------------------------------------------------
+
+/**
+ * A conversation with the downloaded model, on this phone. The SDK keeps the history and builds
+ * every prompt; the screen hands it the next message and renders what comes back.
+ */
+@Composable
+private fun ChatCard(viewModel: SampleViewModel) {
+    val availability by viewModel.chatAvailability.collectAsState()
+    val chat by viewModel.chat.collectAsState()
+    var draft by remember { mutableStateOf("") }
+    val ready = availability == ChatAvailability.Ready
+    val replying = chat.question != null
+
+    Card(modifier = Modifier.fillMaxWidth()) {
+        Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            Text("On-device chat", style = MaterialTheme.typography.titleMedium)
+            Text(
+                "Runs on this phone's engine with the downloaded model; nothing the user types leaves " +
+                    "the device. Chat and Turbo share the engine, so chat works only while Turbo is off.",
+                style = MaterialTheme.typography.bodySmall,
+            )
+            InfoRow("Availability", availabilityLabel(availability))
+
+            chat.history.forEach { message ->
+                ChatLine(if (message.role == ChatRole.MODEL) "Model" else "You", message.content)
+            }
+            chat.question?.let { question ->
+                ChatLine("You", question)
+                ChatLine("Model", chat.answer.ifEmpty { "…" })
+            }
+            chat.error?.let { Text(it, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall) }
+
+            OutlinedTextField(
+                value = draft,
+                onValueChange = { draft = it },
+                modifier = Modifier.fillMaxWidth(),
+                label = { Text("Message") },
+                enabled = ready && !replying,
+            )
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                if (replying) {
+                    Button(onClick = viewModel::cancelChat) { Text("Stop") }
+                } else {
+                    Button(onClick = { viewModel.sendChat(draft); draft = "" }, enabled = ready && draft.isNotBlank()) { Text("Send") }
+                }
+                if (chat.history.isNotEmpty() || replying) {
+                    OutlinedButton(onClick = viewModel::closeChat) { Text("Close chat") }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun ChatLine(who: String, text: String) {
+    Column {
+        Text(who, style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.primary)
+        Text(text, style = MaterialTheme.typography.bodyMedium)
+    }
+}
+
+private fun availabilityLabel(availability: ChatAvailability): String = when (availability) {
+    ChatAvailability.Ready -> "ready"
+    ChatAvailability.NoModel -> "no model on the device yet"
+    ChatAvailability.TurboOn -> "Turbo is on — switch it off to chat"
 }
 
 // --- Turbo Mode -------------------------------------------------------------------------------

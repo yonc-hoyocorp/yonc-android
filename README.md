@@ -1,9 +1,9 @@
 # YOnC SDK — Android sample
 
 A small Jetpack Compose app that integrates the YOnC Android SDK the way a partner app does:
-download the model the network assigns to the phone, then switch on **Turbo Mode** — the phone
-contributes its idle compute to the YOnC network while it charges, and the network reports what
-each of your users earned.
+download the model the network assigns to the phone, chat with it **on the device**, and switch
+on **Turbo Mode** — the phone contributes its idle compute to the YOnC network while it charges,
+and the network reports what each of your users earned.
 
 The app is deliberately plain: one `Application`, one `Activity`, one `ViewModel`, one screen.
 Everything the SDK needs from a host is visible in those four files; a fifth holds the words the
@@ -11,6 +11,10 @@ screen and the Turbo notification share.
 
 ## What's new since 0.3.0
 
+- **0.6.0:** on-device chat — `yonc.localChat` opens a conversation with a downloaded model and
+  streams the reply; it runs only while Turbo is off (section 7). `ModelInfo.licenseUrl` links each
+  model's licence terms. Reporting a problem: section 9. No breaking change: a 0.5.0 integration
+  moves to 0.6.0 without code changes.
 - **0.5.0, breaking:** `ModelInfo.sizeLabel` and `ModelInfo.spec` are gone. `ModelInfo.sizeBytes`
   is the exact download size and `ModelEntry.Downloading` carries `receivedBytes` / `totalBytes`;
   the host formats sizes (section 3).
@@ -56,7 +60,7 @@ dependencyResolutionManagement {
 
 ```kotlin
 dependencies {
-    implementation("dev.yonc:yonc-android:0.5.0")
+    implementation("dev.yonc:yonc-android:0.6.1")
 }
 
 android {
@@ -90,8 +94,8 @@ class SampleApplication : Application() {
 ```
 
 `Yonc.create` returns the SDK handle. A plain `Application` is enough: no base class, no
-interface, no dependency-injection framework required. The handle exposes `models`, `turbo` and
-the Android-only `backgroundWork`.
+interface, no dependency-injection framework required. The handle exposes `models`, `turbo`,
+`localChat` and the Android-only `backgroundWork`.
 
 **Your own Router (optional).** Without an `environment` the SDK talks to the YOnC network its
 release was built for. A partner that operates its own Router instance passes where it lives, once
@@ -137,6 +141,10 @@ Sizes are bytes, and turning them into text is the host's job (units, rounding, 
 `receivedBytes` and `totalBytes`; its `progress` (0..1) derives from them and stays 0 while the
 total is unknown (0). This sample shows "1B · INT4 · 584 MB" from `tier`, `quant` and `sizeBytes`,
 and "312 MB / 584 MB" with a progress bar while downloading.
+
+`ModelInfo.licenseUrl` is a link to the model's licence terms, served with the catalogue (empty
+when the network has none for an entry). Show it beside the model — on the row, or in your About
+screen — so your users can read the terms of the model they run.
 
 ## 4. Turbo Mode
 
@@ -276,7 +284,80 @@ This sample reads the two values from `local.properties` so it can be tried with
 system — a real app passes the signed-in user's id. With attestation configured, the Turbo card's
 *Account* field calls `setReportingLabel`; the switch lasts until the process ends.
 
-## 7. Build and run
+## 7. On-device chat
+
+`yonc.localChat` runs conversations on the phone's own engine with a model already on the device.
+Nothing the user types and nothing the model answers leaves the phone: a chat turn sends nothing
+to the network.
+
+```kotlin
+yonc.localChat.availability                     // StateFlow<ChatAvailability>: Ready, NoModel, TurboOn
+
+val session = yonc.localChat.session(local)     // a new, empty conversation on a ModelEntry.Local
+session.send("Salom!").collect { event ->       // Flow<TokenEvent>: cold — collecting runs the turn
+    if (!event.thinking) answer.append(event.text)   // reasoning (models that think) is flagged, the answer is plain text
+}
+session.history                                 // List<ChatMessage>: the committed exchanges, answer text only
+session.lastTokenCounts                         // engine-counted input/output tokens of the last completed reply
+session.reset()                                 // start over in place
+session.close()                                 // end the conversation: history discarded, model unloaded
+```
+
+- **Availability.** `Ready`, `NoModel` (nothing downloaded yet) or `TurboOn`. Read it before
+  showing the chat entry; this sample disables the message field otherwise. Chat does not gate on
+  battery, charging or temperature, needs no attestation and no YOnC consent — only a downloaded
+  model.
+- **Chat and Turbo share the device's one engine, so chat runs only while Turbo is off.** A message
+  sent while Turbo is on fails with `ChatUnavailableException` (its `reason` is `TurboOn`) before
+  it reaches the engine; switching Turbo on stops a reply in flight the same way. After Turbo is
+  switched off, chat is available again within seconds. Chat never interrupts a network task, so it
+  does not touch earnings, Turbo statistics, attestation or the Turbo notification.
+- **One conversation at a time.** `session(model)` starts a new, empty conversation. It keeps its
+  own history and builds every prompt from it; you pass only the next message. The engine holds one
+  conversation: switching between two sessions rebuilds the other's context on its next message.
+- **`send` is cold.** Collecting the flow runs the turn; cancelling the collection stops the
+  generation. The first message loads the model, which takes seconds on a large model. One reply at
+  a time per session. Every `TokenEvent` carries the engine's metrics (`metrics.ttftMs`,
+  `metrics.decodeTokenCount`, `metrics.decodeTokS`). A stopped or failed reply keeps its partial
+  answer in `history`, and the next message continues the conversation.
+- **Errors arrive in the flow:** `ChatUnavailableException` (Turbo on, also mid-reply),
+  `ModelChecksumException` (a damaged model file — delete and download again), the engine's own
+  errors (a failed load, an engine process that died), `IllegalStateException` on a closed session.
+  The next message retries.
+- **Lifecycle.** While a chat is in use, the engine keeps the model loaded in its own process,
+  with the SDK's engine notification (`EngineNotification`, section 2) showing. `close()` ends the
+  conversation for good: a reply in flight stops, the history is discarded and the engine unloads
+  the model — the process exits and its notification goes — unless Turbo is on or another
+  session's reply is streaming. The session is finished; the next conversation is a new
+  `session(model)`, whose first message loads the model again. Call it when your chat screen
+  closes (this sample's *Close chat* button and the ViewModel's `onCleared`). If Android ends the
+  engine process in the background, the next message loads the model again. Chat adds no
+  permission and no foreground-service type to what the SDK already declares for Turbo.
+- **Limits.** One reply at a time per session, one conversation at a time on the engine. The
+  context window and what happens when a conversation outgrows it are not specified in this
+  release: keep conversations short and start over with `reset()` or a new session.
+- **Models and languages.** Any downloaded catalogue model can open a conversation (section 3).
+  Gemma 3 1B, the model the network assigns by default, is the one chat is checked with; the others
+  are possible but not the default. Gemma 3 1B is a small general model: it has not been measured
+  in Uzbek or Russian, and a model of this size is not expected to hold a conversation in Uzbek
+  well.
+- **Generation options.** None in this release: a model's `temperature` from the catalogue sets
+  its sampling, and every chat reply runs under a repetition penalty (1.1 over the last 64 tokens,
+  the same on Android and iOS) so a small model escapes verbatim loops. A system prompt,
+  temperature and output length per conversation are planned; tell YOnC which you need and in
+  which chat scenarios.
+- **Privacy.** A chat turn sends nothing to the network: the user's messages and the model's
+  replies stay on the phone. The SDK uses the network for the model catalogue, model downloads,
+  Turbo, and a report when the engine fails to load a model (the model, accelerator, reason and
+  memory; never text). The SDK applies no content filtering of its own; the models carry only
+  their own training, so any filtering your app needs is on your side.
+- **Testing the states.** Delete the downloaded model and availability is `NoModel`; switch Turbo
+  on and it is `TurboOn`; with a model on the phone and Turbo off it is `Ready`. Engine failures
+  and thermal limits cannot be forced from the app. The smallest model in the catalogue is
+  Gemma 3 1B; there is no smaller test model. To test against the YOnC test or UAT Router, pass
+  its address in `RouterEnvironment` (section 2) with the application id issued for it.
+
+## 8. Build and run
 
 ```
 ./gradlew :app:installDebug
@@ -286,12 +367,25 @@ The release build (`./gradlew :app:assembleRelease`) is shrunk with R8 and the d
 only — the SDK AAR carries its own keep rules, so the host adds none (this sample's
 `proguard-rules.pro` is empty on purpose).
 
+## 9. Reporting a problem
+
+The SDK has no debug flag. The inference engine's own lines reach logcat at all times, from the
+engine's process (`<your package>:engine`). With a bug report send YOnC:
+
+- the steps to reproduce;
+- the SDK version (`dev.yonc:yonc-android:<version>`);
+- the device model and Android version;
+- a logcat capture around the failure (`adb logcat -d > logcat.txt` right after it happens).
+
 ## Known limitations
 
 - arm64-v8a physical devices only; no emulator.
 - Downloads run in the foreground and do not resume after an interruption.
 - A vendor-restricted device (section 5) cannot serve until the user allows background activity
   on the vendor's own screen; the SDK detects and navigates, the user has to flip the switch.
+- Chat and Turbo share the engine: no chat while Turbo is on (section 7). Chat has no system
+  prompt, sampling or output-length options yet, and a small model is not expected to hold a
+  conversation in every language.
 
 ## Project layout
 
@@ -299,7 +393,7 @@ only — the SDK AAR carries its own keep rules, so the host adds none (this sam
 app/src/main/java/dev/yonc/sample/
   SampleApplication.kt   Yonc.create + attestation config + Turbo's notification words
   MainActivity.kt        notification permission request + Compose entry
-  SampleViewModel.kt     the SDK roots exposed to the UI + the account switch
+  SampleViewModel.kt     the SDK roots exposed to the UI + the chat conversation + the account switch
   SafeConditions.kt      the words for why Turbo waits (screen and notification)
-  ui/SampleScreen.kt     model · Turbo (status, reasons, safe state, background work, attestation, account)
+  ui/SampleScreen.kt     model · on-device chat · Turbo (status, reasons, safe state, background work, attestation, account)
 ```
