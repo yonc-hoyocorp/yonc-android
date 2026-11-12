@@ -60,7 +60,7 @@ dependencyResolutionManagement {
 
 ```kotlin
 dependencies {
-    implementation("dev.yonc:yonc-android:0.6.1")
+    implementation("dev.yonc:yonc-android:0.6.2")
 }
 
 android {
@@ -321,8 +321,9 @@ session.close()                                 // end the conversation: history
   `metrics.decodeTokenCount`, `metrics.decodeTokS`). A stopped or failed reply keeps its partial
   answer in `history`, and the next message continues the conversation.
 - **Errors arrive in the flow:** `ChatUnavailableException` (Turbo on, also mid-reply),
-  `ModelChecksumException` (a damaged model file — delete and download again), the engine's own
-  errors (a failed load, an engine process that died), `IllegalStateException` on a closed session.
+  `ChatBusyException` (the session's previous reply is still streaming), `ModelChecksumException`
+  (a damaged model file — delete and download again), the engine's own errors (a failed load, an
+  engine process that died), `IllegalStateException` on a closed session.
   The next message retries.
 - **Lifecycle.** While a chat is in use, the engine keeps the model loaded in its own process,
   with the SDK's engine notification (`EngineNotification`, section 2) showing. `close()` ends the
